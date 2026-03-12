@@ -8,6 +8,7 @@ from flask import Flask
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.enums import ParseMode
+from aiogram.client.default import DefaultBotProperties
 from aiogram.filters import Command, CommandStart, CommandObject
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -45,7 +46,10 @@ db = cluster["tg_task_final_bot"]
 users, tasks, withdraws = db["users"], db["tasks"], db["withdraws"]
 
 # Initialize Bot with HTML Parse Mode
-bot = Bot(token=TOKEN, parse_mode=ParseMode.HTML)
+bot = Bot(
+    token=TOKEN, 
+    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+)
 dp = Dispatcher()
 
 # --- KEYBOARDS ---
