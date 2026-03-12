@@ -21,10 +21,10 @@ ADMIN_ID_VAL = os.environ.get("ADMIN_ID")
 SHORTENER_API_KEY = os.environ.get("SHORTENER_API_KEY")
 
 # --- CONFIGURATION ---
-IMAGE_URL = "https://telegra.ph/file/your_image_id.jpg" # अपनी इमेज लिंक यहाँ डालें
+IMAGE_URL = "LOGO.png" # अपनी इमेज लिंक यहाँ डालें
 SHORTENER_URL = "https://mdiskshort.in/api?api={api}&url={url}" 
 FSUB_CHANNELS = [-1003627956964] 
-MIN_WITHDRAW = 150
+MIN_WITHDRAW = 10
 TASK_REWARD = 0.30
 REFER_REWARD = 0.50
 
@@ -99,10 +99,10 @@ async def start_handler(message: types.Message, command: CommandObject):
             if u["warnings"] >= 3:
                 await users.update_one({"_id": user_id}, {"$set": {"is_banned": True}})
                 return await message.answer("🚫 **BANNED!**\nReason: Continuous Timer Bypass.")
-            return await message.answer(f"⚠️ **Warning!**\nDon't bypass the timer. Wait at least 30s.\nWarnings: {u['warnings']}/3")
+            return await message.answer(f"⚠️ **Warning!**\nDon't bypass Link. Complete All the Steps.\nWarnings: {u['warnings']}/3")
 
         await tasks.update_one({"token": token}, {"$set": {"used": True}})
-        await users.update_one({"_id": user_id}, {"$inc": {"balance": TASK_REWARD, "tasks": 1}})
+        await users.update_one({"_id": user_id}, {"$inc": {"balance": TASK_REWARD ₹, "tasks": 1}})
         
         u = await users.find_one({"_id": user_id})
         if u["referrer"] and not u["ref_claimed"]:
