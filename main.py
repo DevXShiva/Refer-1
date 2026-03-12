@@ -12,12 +12,19 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeybo
 from motor.motor_asyncio import AsyncIOMotorClient
 from bson import ObjectId
 
+# Load environment variables
 load_dotenv()
 
-TOKEN = os.getenv("BOT_TOKEN")
-MONGO_URL = os.getenv("MONGO_URL")
-ADMIN_ID = int(os.getenv("ADMIN_ID"))
-SHORTENER_API_KEY = os.getenv("SHORTENER_API_KEY")
+TOKEN = os.environ.get("BOT_TOKEN")
+MONGO_URL = os.environ.get("MONGO_URL")
+ADMIN_ID_VAL = os.environ.get("ADMIN_ID")
+SHORTENER_API_KEY = os.environ.get("SHORTENER_API_KEY")
+
+# Simple validation to prevent NoneType errors
+if not TOKEN:
+    raise ValueError("BOT_TOKEN is not set in environment variables!")
+
+ADMIN_ID = int(ADMIN_ID_VAL) if ADMIN_ID_VAL else 0
 
 SHORTENER_URL = "https://mdiskshort.in/api?api={api}&url={url}" 
 FSUB_CHANNELS = [-1003627956964] 
@@ -72,7 +79,7 @@ async def get_fsub_kb():
 
 @dp.message(CommandStart())
 async def start_handler(message: types.Message, command: CommandObject):
-    user_id = message.from_id
+    user_id = message.from_user.id
     args = command.args
     user = await users.find_one({"_id": user_id})
     if not user:
@@ -106,12 +113,13 @@ async def start_handler(message: types.Message, command: CommandObject):
 
 @dp.message(F.text == "💰 Start Task")
 async def task_init(message: types.Message):
-    u = await users.find_one({"_id": message.from_id})
+    user_id = message.from_user.id
+    u = await users.find_one({"_id": user_id})
     if u.get("is_banned"): return await message.answer("You are BANNED!")
-    if not await is_subscribed(message.from_id): return await message.answer("Join channels first!", reply_markup=await get_fsub_kb())
+    if not await is_subscribed(user_id): return await message.answer("Join channels first!", reply_markup=await get_fsub_kb())
     
     token = str(uuid.uuid4())[:10]
-    await tasks.insert_one({"token": token, "user_id": message.from_id, "used": False, "created_at": time.time()})
+    await tasks.insert_one({"token": token, "user_id": user_id, "used": False, "created_at": time.time()})
     me = await bot.get_me()
     raw_url = f"https://t.me/{me.username}?start=verify_{token}"
     async with aiohttp.ClientSession() as session:
@@ -126,13 +134,15 @@ async def tutorial_handler(message: types.Message):
 
 @dp.message(F.text == "📊 Profile")
 async def profile_handler(message: types.Message):
-    u = await users.find_one({"_id": message.from_id})
+    user_id = message.from_user.id
+    u = await users.find_one({"_id": user_id})
     await message.answer(f"👤 **Your Profile**\n\nBalance: ₹{u['balance']:.2f}\nTasks Done: {u['tasks']}\nReferrals: {u['referrals']}\nWarnings: {u['warnings']}/3\nID: `{u['_id']}`", parse_mode="Markdown")
 
 @dp.message(F.text == "👥 Refer & Earn")
 async def refer_handler(message: types.Message):
+    user_id = message.from_user.id
     me = await bot.get_me()
-    link = f"https://t.me/{me.username}?start={message.from_id}"
+    link = f"https://t.me/{me.username}?start={user_id}"
     await message.answer(f"Invite friends and earn ₹{REFER_REWARD} when they complete their first task!\n\nYour Link: `{link}`", parse_mode="Markdown")
 
 @dp.message(F.text == "🏆 Leaderboard")
@@ -146,30 +156,32 @@ async def leaderboard_handler(message: types.Message):
 
 @dp.message(F.text == "💳 Withdraw")
 async def withdraw_handler(message: types.Message):
-    u = await users.find_one({"_id": message.from_id})
+    user_id = message.from_user.id
+    u = await users.find_one({"_id": user_id})
     if u["balance"] < MIN_WITHDRAW: return await message.answer(f"Insufficient balance! Minimum withdraw is ₹{MIN_WITHDRAW}")
     await message.answer("Send your UPI ID or Payment Details to proceed:")
 
 @dp.message(F.text.contains("@"))
 async def handle_payment_input(message: types.Message):
-    u = await users.find_one({"_id": message.from_id})
-    if u["balance"] >= MIN_WITHDRAW:
+    user_id = message.from_user.id
+    u = await users.find_one({"_id": user_id})
+    if u and u["balance"] >= MIN_WITHDRAW:
         amt = u["balance"]
-        await users.update_one({"_id": message.from_id}, {"$set": {"balance": 0.0}})
-        res = await withdraws.insert_one({"user_id": message.from_id, "amount": amt, "info": message.text, "status": "pending"})
-        await bot.send_message(ADMIN_ID, f"📢 **New Withdrawal Request**\nUser: `{message.from_id}`\nAmount: ₹{amt}\nDetails: {message.text}\nApprove: `/approve {res.inserted_id}`", parse_mode="Markdown")
+        await users.update_one({"_id": user_id}, {"$set": {"balance": 0.0}})
+        res = await withdraws.insert_one({"user_id": user_id, "amount": amt, "info": message.text, "status": "pending"})
+        await bot.send_message(ADMIN_ID, f"📢 **New Withdrawal Request**\nUser: `{user_id}`\nAmount: ₹{amt}\nDetails: {message.text}\nApprove: `/approve {res.inserted_id}`", parse_mode="Markdown")
         await message.answer("Your withdrawal request has been sent for approval! ✅")
 
 @dp.message(Command("stats"))
 async def stats_admin(message: types.Message):
-    if message.from_id != ADMIN_ID: return
+    if message.from_user.id != ADMIN_ID: return
     total = await users.count_documents({})
     tasks_done = await tasks.count_documents({"used": True})
     await message.answer(f"📊 **Bot Stats**\nTotal Users: {total}\nTotal Tasks Completed: {tasks_done}")
 
 @dp.message(Command("broadcast"))
 async def broadcast_admin(message: types.Message):
-    if message.from_id != ADMIN_ID or not message.reply_to_message: return
+    if message.from_user.id != ADMIN_ID or not message.reply_to_message: return
     s, f = 0, 0
     async for u in users.find():
         try:
@@ -180,7 +192,7 @@ async def broadcast_admin(message: types.Message):
 
 @dp.message(Command("approve"))
 async def approve_withdraw(message: types.Message, command: CommandObject):
-    if message.from_id != ADMIN_ID: return
+    if message.from_user.id != ADMIN_ID: return
     try:
         w_id = ObjectId(command.args)
         w = await withdraws.find_one({"_id": w_id})
@@ -198,7 +210,9 @@ async def check_fsub_callback(callback: types.CallbackQuery):
     else: await callback.answer("Please join all channels first!", show_alert=True)
 
 async def main():
+    # Start the keep-alive Flask server
     Thread(target=run_flask).start()
+    # Start bot polling
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
