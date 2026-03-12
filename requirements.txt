@@ -1,8 +1,7 @@
-aiogram==3.4.1
-motor==3.3.2
-aiohttp==3.9.3
-flask==3.0.2
-pymongo==4.6.1
-python-dotenv==1.0.1
-pydantic==2.6.4
-pydantic-core==2.16.3
+aiogram
+motor
+aiohttp
+flask
+pymongo
+python-dotenv
+pydantic
