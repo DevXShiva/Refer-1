@@ -115,7 +115,7 @@ async def start_handler(message: types.Message, command: CommandObject):
         task_data = await tasks.find_one({"token": token, "user_id": user_id, "used": False})
         if not task_data: return await message.answer("❌ Invalid or Expired Token!")
 
-        if time.time() - task_data["created_at"] < 30:
+        if time.time() - task_data["created_at"] < 50:
             await users.update_one({"_id": user_id}, {"$inc": {"warnings": 1}})
             u = await users.find_one({"_id": user_id})
             if u["warnings"] >= 3:
