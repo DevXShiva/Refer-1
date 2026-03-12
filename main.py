@@ -19,8 +19,8 @@ MONGO_URL = os.getenv("MONGO_URL")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
 SHORTENER_API_KEY = os.getenv("SHORTENER_API_KEY")
 
-SHORTENER_URL = "https://gplinks.in/api?api={api}&url={url}" 
-FSUB_CHANNELS = [-100123456789, -100987654321] 
+SHORTENER_URL = "https://mdiskshort.in/api?api={api}&url={url}" 
+FSUB_CHANNELS = [-1003627956964] 
 MIN_WITHDRAW = 150
 TASK_REWARD = 0.30
 REFER_REWARD = 0.50
