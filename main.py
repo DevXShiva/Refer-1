@@ -21,7 +21,7 @@ ADMIN_ID_VAL = os.environ.get("ADMIN_ID")
 SHORTENER_API_KEY = os.environ.get("SHORTENER_API_KEY")
 
 # --- CONFIGURATION ---
-IMAGE_URL = "LOGO.png" # अपनी इमेज लिंक यहाँ डालें
+IMAGE_URL = "https://i.postimg.cc/BnvmwT0M/LOGO.png" # अपनी इमेज लिंक यहाँ डालें
 SHORTENER_URL = "https://mdiskshort.in/api?api={api}&url={url}" 
 FSUB_CHANNELS = [-1003627956964] 
 MIN_WITHDRAW = 10
