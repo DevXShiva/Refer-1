@@ -102,7 +102,7 @@ async def start_handler(message: types.Message, command: CommandObject):
             return await message.answer(f"⚠️ **Warning!**\nDon't bypass Link. Complete All the Steps.\nWarnings: {u['warnings']}/3")
 
         await tasks.update_one({"token": token}, {"$set": {"used": True}})
-        await users.update_one({"_id": user_id}, {"$inc": {"balance": TASK_REWARD ₹, "tasks": 1}})
+        await users.update_one({"_id": user_id}, {"$inc": {"balance": TASK_REWARD, "tasks": 1}})
         
         u = await users.find_one({"_id": user_id})
         if u["referrer"] and not u["ref_claimed"]:
