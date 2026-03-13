@@ -66,12 +66,12 @@ def main_menu_kb():
 # Professional Inline Keyboard for Messages
 def inline_menu_kb():
     btns = [
-        [InlineKeyboardButton(text="💰 Start Task", callback_data="start_task_btn"), 
+        [InlineKeyboardButton(text="💰 Start Task", callback_data="start_task_btn", style="success"), 
          InlineKeyboardButton(text="🎥 Tutorial", callback_data="tutorial_btn")],
         [InlineKeyboardButton(text="👥 Refer & Earn", callback_data="refer_btn"), 
          InlineKeyboardButton(text="🏆 Leaderboard", callback_data="leaderboard_btn")],
         [InlineKeyboardButton(text="📊 Profile", callback_data="profile_btn"), 
-         InlineKeyboardButton(text="💳 Withdraw", callback_data="withdraw_btn")]
+         InlineKeyboardButton(text="💳 Withdraw", callback_data="withdraw_btn", style="success")]
     ]
     return InlineKeyboardMarkup(inline_keyboard=btns)
 
@@ -82,7 +82,7 @@ async def get_fsub_kb():
             chat = await bot.get_chat(chat_id)
             btns.append([InlineKeyboardButton(text=f"📢 Join Channel {i}", url=chat.invite_link or "https://t.me/yourlink")])
         except: continue
-    btns.append([InlineKeyboardButton(text="✅ Check Subscription", callback_data="check_fsub")])
+    btns.append([InlineKeyboardButton(text="✅ Check Subscription", callback_data="check_fsub", style="success")])
     return InlineKeyboardMarkup(inline_keyboard=btns)
 
 async def is_subscribed(user_id):
