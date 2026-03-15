@@ -1,300 +1,1331 @@
 import os
 import asyncio
-import uuid
 import time
-import aiohttp
-from threading import Thread
-from flask import Flask
+import uuid
+from datetime import datetime
 from dotenv import load_dotenv
-from aiogram import Bot, Dispatcher, F, types
-from aiogram.enums import ParseMode
-from aiogram.client.default import DefaultBotProperties
-from aiogram.filters import Command, CommandStart, CommandObject
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
-from motor.motor_asyncio import AsyncIOMotorClient
-from bson import ObjectId
-
-# Load environment variables
 load_dotenv()
-
-TOKEN = os.environ.get("BOT_TOKEN")
-MONGO_URL = os.environ.get("MONGO_URL")
-ADMIN_ID_VAL = os.environ.get("ADMIN_ID")
-SHORTENER_API_KEY = os.environ.get("SHORTENER_API_KEY")
-
-# --- CONFIGURATION ---
-IMAGE_URL = "https://i.postimg.cc/BnvmwT0M/LOGO.png" 
-SHORTENER_URL = "https://mdiskshort.in/api?api={api}&url={url}" 
-FSUB_CHANNELS = [-1003627956964] 
-MIN_WITHDRAW = 10
-TASK_REWARD = 0.30
-REFER_REWARD = 0.50
-
-if not TOKEN:
-    raise ValueError("BOT_TOKEN is not set in environment variables!")
-
-ADMIN_ID = int(ADMIN_ID_VAL) if ADMIN_ID_VAL else 0
-
-app = Flask('')
-@app.route('/')
-def home(): return "Bot is Running 24/7!"
-
-def run_flask(): app.run(host='0.0.0.0', port=8080)
-
-cluster = AsyncIOMotorClient(MONGO_URL)
-db = cluster["tg_task_final_bot"]
-users, tasks, withdraws = db["users"], db["tasks"], db["withdraws"]
-
-# Initialize Bot with HTML Parse Mode
-bot = Bot(
-    token=TOKEN, 
-    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup
 )
-dp = Dispatcher()
 
-# --- KEYBOARDS ---
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+    MessageHandler,
+    filters
+)
 
-# Normal Reply Keyboard (Menu)
-def main_menu_kb():
-    kb = [
-        [KeyboardButton(text="💰 Start Task"), KeyboardButton(text="🎥 Tutorial")],
-        [KeyboardButton(text="👥 Refer & Earn"), KeyboardButton(text="🏆 Leaderboard")],
-        [KeyboardButton(text="📊 Profile"), KeyboardButton(text="💳 Withdraw")]
-    ]
-    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
+from pymongo import MongoClient
 
-# Professional Inline Keyboard for Messages
-def inline_menu_kb():
-    btns = [
-        [InlineKeyboardButton(text="💰 Start Task", callback_data="start_task_btn", style="success"), 
-         InlineKeyboardButton(text="🎥 Tutorial", callback_data="tutorial_btn")],
-        [InlineKeyboardButton(text="👥 Refer & Earn", callback_data="refer_btn"), 
-         InlineKeyboardButton(text="🏆 Leaderboard", callback_data="leaderboard_btn")],
-        [InlineKeyboardButton(text="📊 Profile", callback_data="profile_btn"), 
-         InlineKeyboardButton(text="💳 Withdraw", callback_data="withdraw_btn", style="success")]
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=btns)
+# ==============================
+# CONFIG
+# ==============================
 
-async def get_fsub_kb():
-    btns = []
-    for i, chat_id in enumerate(FSUB_CHANNELS, 1):
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+MONGO_URL = os.getenv("MONGO_URL")
+
+ADMIN_IDS = [123456789]
+
+SHORTNER_API = "https://mdiskshort.in/api"
+SHORTNER_KEY = os.getenv("SHORTNER_KEY")
+
+BOT_USERNAME = "PocketMoneyTask_bot"
+
+TASK_REWARD = 0.30
+DEFAULT_REF_REWARD = 0.80
+
+MIN_WITHDRAW = 30
+
+TASK_COOLDOWN = 60
+TOKEN_EXPIRE = 300
+
+# ==============================
+# DATABASE
+# ==============================
+
+mongo = MongoClient(MONGO_URL)
+
+db = mongo["earning_bot"]
+
+users = db["users"]
+tasks = db["tasks"]
+withdrawals = db["withdrawals"]
+channels = db["channels"]
+settings = db["settings"]
+warnings = db["warnings"]
+
+# ==============================
+# BOT INIT
+# ==============================
+
+app = Application.builder().token(BOT_TOKEN).build()
+
+# ==============================
+# DATABASE HELPERS
+# ==============================
+
+
+def get_user(user_id):
+
+    user = users.find_one({"user_id": user_id})
+
+    if not user:
+
+        users.insert_one({
+            "user_id": user_id,
+            "balance": 0,
+            "tasks": 0,
+            "referrals": 0,
+            "warnings": 0,
+            "referrer": None,
+            "custom_ref": None,
+            "last_task": 0,
+            "join_date": int(time.time())
+        })
+
+        user = users.find_one({"user_id": user_id})
+
+    return user
+
+
+def add_balance(user_id, amount):
+
+    users.update_one(
+        {"user_id": user_id},
+        {"$inc": {"balance": amount}}
+    )
+
+
+def add_task_count(user_id):
+
+    users.update_one(
+        {"user_id": user_id},
+        {"$inc": {"tasks": 1}}
+    )
+
+
+def add_referral(referrer):
+
+    users.update_one(
+        {"user_id": referrer},
+        {"$inc": {"referrals": 1}}
+    )
+
+
+def get_balance(user_id):
+
+    user = get_user(user_id)
+
+    return user["balance"]
+
+
+# ==============================
+# TOKEN GENERATOR
+# ==============================
+
+
+def generate_token():
+
+    return str(uuid.uuid4())
+
+
+# ==============================
+# TASK CREATION
+# ==============================
+
+
+def create_task(user_id):
+
+    token = generate_token()
+
+    tasks.insert_one({
+        "token": token,
+        "user_id": user_id,
+        "created": int(time.time()),
+        "status": "pending"
+    })
+
+    return token
+
+
+# ==============================
+# TOKEN VALIDATION
+# ==============================
+
+
+def validate_token(user_id, token):
+
+    task = tasks.find_one({"token": token})
+
+    if not task:
+        return False, "invalid"
+
+    if task["user_id"] != user_id:
+        return False, "not_owner"
+
+    if task["status"] != "pending":
+        return False, "used"
+
+    now = int(time.time())
+
+    created = task["created"]
+
+    if now - created < 30:
+        return False, "bypass"
+
+    if now - created > TOKEN_EXPIRE:
+        return False, "expired"
+
+    return True, task
+
+
+# ==============================
+# COMPLETE TASK
+# ==============================
+
+
+def complete_task(user_id, token):
+
+    tasks.update_one(
+        {"token": token},
+        {"$set": {"status": "done"}}
+    )
+
+    add_balance(user_id, TASK_REWARD)
+
+    add_task_count(user_id)
+
+
+# ==============================
+# WARNING SYSTEM
+# ==============================
+
+
+def add_warning(user_id):
+
+    users.update_one(
+        {"user_id": user_id},
+        {"$inc": {"warnings": 1}}
+    )
+
+    user = users.find_one({"user_id": user_id})
+
+    if user["warnings"] >= 3:
+        users.update_one(
+            {"user_id": user_id},
+            {"$set": {"banned": True}}
+        )
+
+        return True
+
+    return False
+    # ==============================
+# FORCE SUBSCRIBE CHECK
+# ==============================
+
+async def check_fsub(user_id, context: ContextTypes.DEFAULT_TYPE):
+
+    required_channels = channels.find({"active": True})
+
+    not_joined = []
+
+    for ch in required_channels:
+
         try:
-            chat = await bot.get_chat(chat_id)
-            btns.append([InlineKeyboardButton(text=f"📢 Join Channel {i}", url=chat.invite_link or "https://t.me/yourlink")])
-        except: continue
-    btns.append([InlineKeyboardButton(text="✅ Check Subscription", callback_data="check_fsub", style="success")])
-    return InlineKeyboardMarkup(inline_keyboard=btns)
+            member = await context.bot.get_chat_member(ch["channel_id"], user_id)
 
-async def is_subscribed(user_id):
-    for chat_id in FSUB_CHANNELS:
+            if member.status not in ["member", "administrator", "creator"]:
+                not_joined.append(ch)
+
+        except:
+            not_joined.append(ch)
+
+    return not_joined
+
+
+async def fsub_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE, missing):
+
+    buttons = []
+
+    for ch in missing:
+        buttons.append([InlineKeyboardButton(
+            f"Join {ch['title']}",
+            url=f"https://t.me/{ch['username']}"
+        )])
+
+    buttons.append([InlineKeyboardButton("✅ Joined", callback_data="recheck_fsub")])
+
+    await update.message.reply_text(
+        "⚠️ You must join all channels to use the bot.",
+        reply_markup=InlineKeyboardMarkup(buttons)
+    )
+
+
+# ==============================
+# MAIN MENU
+# ==============================
+
+def main_menu():
+
+    keyboard = [
+        [InlineKeyboardButton("💰 Start Task", callback_data="start_task")],
+        [InlineKeyboardButton("🎥 Tutorial", callback_data="tutorial")],
+        [
+            InlineKeyboardButton("👥 Refer & Earn", callback_data="refer"),
+            InlineKeyboardButton("🏆 Leaderboard", callback_data="leaderboard")
+        ],
+        [
+            InlineKeyboardButton("📊 Profile", callback_data="profile"),
+            InlineKeyboardButton("💳 Withdraw", callback_data="withdraw")
+        ],
+        [InlineKeyboardButton("📢 Add Your Channel", callback_data="promo")]
+    ]
+
+    return InlineKeyboardMarkup(keyboard)
+
+
+# ==============================
+# START COMMAND
+# ==============================
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    user_id = update.effective_user.id
+
+    user = get_user(user_id)
+
+    # referral detection
+
+    if context.args:
+
         try:
-            member = await bot.get_chat_member(chat_id=chat_id, user_id=user_id)
-            if member.status in ["left", "kicked", "member" == False]: return False
-            if member.status in ["member", "administrator", "creator"]: continue
-            else: return False
-        except: return False
+            ref_id = int(context.args[0])
+
+            if ref_id != user_id and user["referrer"] is None:
+
+                users.update_one(
+                    {"user_id": user_id},
+                    {"$set": {"referrer": ref_id}}
+                )
+
+        except:
+            pass
+
+    # banned check
+
+    if user.get("banned"):
+
+        await update.message.reply_text("❌ You are banned.")
+        return
+
+    # force subscribe check
+
+    missing = await check_fsub(user_id, context)
+
+    if missing:
+
+        await fsub_prompt(update, context, missing)
+        return
+
+    # welcome message
+
+    text = (
+        "👋 Welcome to the earning bot.\n\n"
+        "💰 Complete tasks and earn money.\n"
+        "👥 Invite friends to earn more.\n\n"
+        "Choose an option below."
+    )
+
+    await update.message.reply_text(
+        text,
+        reply_markup=main_menu()
+    )
+
+
+# ==============================
+# FSUB RECHECK
+# ==============================
+
+async def recheck_fsub(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    query = update.callback_query
+    user_id = query.from_user.id
+
+    await query.answer()
+
+    missing = await check_fsub(user_id, context)
+
+    if missing:
+
+        await query.message.reply_text("❌ You still haven't joined all channels.")
+        return
+
+    await query.message.reply_text(
+        "✅ Access granted.",
+        reply_markup=main_menu()
+    )
+
+
+# ==============================
+# PROFILE
+# ==============================
+
+async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    query = update.callback_query
+    user_id = query.from_user.id
+
+    await query.answer()
+
+    user = get_user(user_id)
+
+    text = (
+        f"👤 Your Profile\n\n"
+        f"💰 Balance: ₹{user['balance']:.2f}\n"
+        f"⚡ Tasks Completed: {user['tasks']}\n"
+        f"👥 Referrals: {user['referrals']}\n"
+        f"⚠️ Warnings: {user['warnings']}"
+    )
+
+    await query.message.edit_text(
+        text,
+        reply_markup=main_menu()
+    )
+
+
+# ==============================
+# REFER SYSTEM
+# ==============================
+
+async def refer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    query = update.callback_query
+    user_id = query.from_user.id
+
+    await query.answer()
+
+    user = get_user(user_id)
+
+    ref_link = f"https://t.me/{BOT_USERNAME}?start={user_id}"
+
+    reward = user["custom_ref"] if user["custom_ref"] else DEFAULT_REF_REWARD
+
+    text = (
+        "👥 Refer & Earn\n\n"
+        f"💰 Earn ₹{reward} per referral\n\n"
+        "Share your link:\n"
+        f"{ref_link}"
+    )
+
+    await query.message.edit_text(
+        text,
+        reply_markup=main_menu()
+    )
+
+
+# ==============================
+# TUTORIAL BUTTON
+# ==============================
+
+async def tutorial(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    query = update.callback_query
+    await query.answer()
+
+    tutorial = settings.find_one({"key": "tutorial"})
+
+    if tutorial:
+
+        await context.bot.send_video(
+            chat_id=query.from_user.id,
+            video=tutorial["file_id"],
+            caption="📺 How to complete tasks"
+        )
+
+    else:
+
+        await query.message.reply_text("Tutorial not set yet.")
+
+
+# ==============================
+# HANDLERS
+# ==============================
+
+app.add_handler(CommandHandler("start", start))
+
+app.add_handler(CallbackQueryHandler(recheck_fsub, pattern="recheck_fsub"))
+app.add_handler(CallbackQueryHandler(profile, pattern="profile"))
+app.add_handler(CallbackQueryHandler(refer, pattern="refer"))
+app.add_handler(CallbackQueryHandler(tutorial, pattern="tutorial"))
+# ==============================
+# TASK COOLDOWN CHECK
+# ==============================
+
+def check_cooldown(user_id):
+
+    user = users.find_one({"user_id": user_id})
+
+    now = int(time.time())
+
+    if now - user["last_task"] < TASK_COOLDOWN:
+        return False
+
     return True
 
-# --- HANDLERS ---
 
-@dp.message(CommandStart())
-async def start_handler(message: types.Message, command: CommandObject):
-    user_id = message.from_user.id
-    args = command.args
-    user = await users.find_one({"_id": user_id})
-    
-    if not user:
-        ref_id = int(args) if args and args.isdigit() else None
-        await users.insert_one({"_id": user_id, "balance": 0.0, "referrals": 0, "tasks": 0, "warnings": 0, "is_banned": False, "referrer": ref_id, "ref_claimed": False})
+def update_last_task(user_id):
 
-    if args and args.startswith("verify_"):
-        if not await is_subscribed(user_id):
-            return await message.answer_photo(IMAGE_URL, caption="⚠️ <b>Access Denied!</b>\n\nYou must join our channels first to verify your task.", reply_markup=await get_fsub_kb())
-        
-        token = args.split("_")[1]
-        task_data = await tasks.find_one({"token": token, "user_id": user_id, "used": False})
-        if not task_data: return await message.answer("❌ Invalid or Expired Token!")
-
-        if time.time() - task_data["created_at"] < 50:
-            await users.update_one({"_id": user_id}, {"$inc": {"warnings": 1}})
-            u = await users.find_one({"_id": user_id})
-            if u["warnings"] >= 3:
-                await users.update_one({"_id": user_id}, {"$set": {"is_banned": True}})
-                return await message.answer("🚫 <b>BANNED!</b>\nReason: Continuous Timer Bypass.")
-            return await message.answer(f"⚠️ <b>Warning!</b>\nDon't bypass Link. Complete All the Steps.\nWarnings: {u['warnings']}/3")
-
-        await tasks.update_one({"token": token}, {"$set": {"used": True}})
-        await users.update_one({"_id": user_id}, {"$inc": {"balance": TASK_REWARD, "tasks": 1}})
-        
-        u = await users.find_one({"_id": user_id})
-        if u["referrer"] and not u["ref_claimed"]:
-            await users.update_one({"_id": u["referrer"]}, {"$inc": {"balance": REFER_REWARD, "referrals": 1}})
-            await users.update_one({"_id": user_id}, {"$set": {"ref_claimed": True}})
-        
-        return await message.answer_photo(IMAGE_URL, caption=f"✅ <b>Task Verified Successfully!</b>\n\n💰 Reward: <b>₹{TASK_REWARD}</b> added to your wallet.", reply_markup=main_menu_kb())
-
-    if not await is_subscribed(user_id):
-        return await message.answer_photo(IMAGE_URL, caption="👋 <b>Welcome!</b>\n\nTo start earning, please join our mandatory channels below:", reply_markup=await get_fsub_kb())
-    
-    welcome_text = (
-        "🌟 <b>Welcome to Earn Pro Bot</b>\n\n"
-        "Complete simple tasks and refer friends to earn real money.\n\n"
-        "🚀 <b>Click 'Start Task' to begin!</b>"
+    users.update_one(
+        {"user_id": user_id},
+        {"$set": {"last_task": int(time.time())}}
     )
-    await message.answer_photo(IMAGE_URL, caption=welcome_text, reply_markup=inline_menu_kb())
-    # Also send reply keyboard to ensure user has it
-    await message.answer("Use the menu below to navigate:", reply_markup=main_menu_kb())
 
-async def generate_task(user_id, message):
-    u = await users.find_one({"_id": user_id})
-    if u.get("is_banned"): return await message.answer("🚫 Your account is banned.")
-    if not await is_subscribed(user_id): return await message.answer("❌ Join channels first!", reply_markup=await get_fsub_kb())
 
-    token = str(uuid.uuid4())[:10]
-    await tasks.insert_one({"token": token, "user_id": user_id, "used": False, "created_at": time.time()})
-    
-    me = await bot.get_me()
-    raw_url = f"https://t.me/{me.username}?start=verify_{token}"
-    async with aiohttp.ClientSession() as session:
-        async with session.get(SHORTENER_URL.format(api=SHORTENER_API_KEY, url=raw_url)) as r:
-            res = await r.json()
-            short_url = res.get("shortenedUrl", "Error")
+# ==============================
+# SHORTLINK GENERATOR
+# ==============================
+
+async def create_shortlink(url):
+
+    # Replace with your shortener API logic
+
+    # Example placeholder
+    short_url = f"https://short.link/?api={SHORTNER_KEY}&url={url}"
+
+    return short_url
+
+
+# ==============================
+# START TASK BUTTON
+# ==============================
+
+async def start_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    query = update.callback_query
+    user_id = query.from_user.id
+
+    await query.answer()
+
+    user = get_user(user_id)
+
+    # banned check
+    if user.get("banned"):
+        await query.message.reply_text("❌ You are banned.")
+        return
+
+    # force subscribe check
+    missing = await check_fsub(user_id, context)
+
+    if missing:
+        await query.message.reply_text("⚠️ Join required channels first.")
+        return
+
+    # cooldown check
+    if not check_cooldown(user_id):
+
+        await query.message.reply_text(
+            "⏳ Please wait before starting another task."
+        )
+        return
+
+    # create token
+    token = create_task(user_id)
+
+    # deep link
+    deep_link = f"https://t.me/{BOT_USERNAME}?start=verify_{token}"
+
+    # shortlink
+    shortlink = await create_shortlink(deep_link)
+
+    # tutorial button
+    buttons = [
+        [InlineKeyboardButton("🔗 Open Shortlink", url=shortlink)],
+        [InlineKeyboardButton("🎥 Tutorial", callback_data="tutorial")]
+    ]
+
+    update_last_task(user_id)
 
     text = (
-        "🛠 <b>New Task Generated!</b>\n\n"
-        "1️⃣ Click the button below\n"
-        "2️⃣ Complete the shortlink\n"
-        "3️⃣ Wait 30 seconds on the final page\n\n"
-        f"💵 <b>Reward:</b> <code>₹{TASK_REWARD}</code>"
+        "💰 Task Started\n\n"
+        "1️⃣ Open the shortlink\n"
+        "2️⃣ Complete verification\n"
+        "3️⃣ You will receive reward\n\n"
+        "⚠️ Do not bypass the system."
     )
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🚀 Open Task Link", url=short_url)]])
-    await bot.send_photo(user_id, photo=IMAGE_URL, caption=text, reply_markup=kb)
 
-@dp.message(F.text == "💰 Start Task")
-async def task_init_msg(message: types.Message):
-    await generate_task(message.from_user.id, message)
+    await query.message.edit_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(buttons)
+    )
 
-@dp.message(F.text == "📊 Profile")
-async def profile_msg(message: types.Message):
-    user_id = message.from_user.id
-    u = await users.find_one({"_id": user_id})
+
+# ==============================
+# TOKEN VERIFICATION
+# ==============================
+
+async def verify_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    user_id = update.effective_user.id
+
+    if not context.args:
+        return
+
+    arg = context.args[0]
+
+    if not arg.startswith("verify_"):
+        return
+
+    token = arg.replace("verify_", "")
+
+    valid, result = validate_token(user_id, token)
+
+    if not valid:
+
+        if result == "bypass":
+
+            banned = add_warning(user_id)
+
+            if banned:
+
+                await update.message.reply_text(
+                    "🚫 You are banned for repeated bypass attempts."
+                )
+
+                return
+
+            await update.message.reply_text(
+                "⚠️ Bypass detected.\n\n"
+                "Generate a new task link and try again."
+            )
+
+            return
+
+        await update.message.reply_text(
+            "❌ Invalid or expired task."
+        )
+
+        return
+
+    # complete task
+    complete_task(user_id, token)
+
+    await update.message.reply_text(
+        f"✅ Task verified!\n\n"
+        f"💰 Earned: ₹{TASK_REWARD:.2f}",
+        reply_markup=main_menu()
+    )
+
+
+# ==============================
+# HANDLER
+# ==============================
+
+app.add_handler(CallbackQueryHandler(start_task, pattern="start_task"))
+app.add_handler(CommandHandler("start", verify_token))
+# ==============================
+# REFERRAL REWARD LOGIC
+# ==============================
+
+def process_referral_reward(user_id):
+
+    user = users.find_one({"user_id": user_id})
+
+    referrer = user.get("referrer")
+
+    if not referrer:
+        return
+
+    ref_user = users.find_one({"user_id": referrer})
+
+    if not ref_user:
+        return
+
+    # reward only on first task
+    if user["tasks"] == 1:
+
+        reward = ref_user["custom_ref"] if ref_user.get("custom_ref") else DEFAULT_REF_REWARD
+
+        users.update_one(
+            {"user_id": referrer},
+            {"$inc": {"balance": reward}}
+        )
+
+        add_referral(referrer)
+
+
+# ==============================
+# UPDATE TASK COMPLETE HOOK
+# ==============================
+
+def complete_task(user_id, token):
+
+    tasks.update_one(
+        {"token": token},
+        {"$set": {"status": "done"}}
+    )
+
+    add_balance(user_id, TASK_REWARD)
+
+    add_task_count(user_id)
+
+    process_referral_reward(user_id)
+
+
+# ==============================
+# LEADERBOARD SYSTEM
+# ==============================
+
+async def leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    query = update.callback_query
+    await query.answer()
+
+    top_users = users.find().sort("tasks", -1).limit(10)
+
+    text = "🏆 Top Task Earners\n\n"
+
+    rank = 1
+
+    for user in top_users:
+
+        text += f"{rank}. {user['user_id']} — {user['tasks']} tasks\n"
+
+        rank += 1
+
+    await query.message.edit_text(
+        text,
+        reply_markup=main_menu()
+    )
+
+
+# ==============================
+# PROFILE EXTENDED
+# ==============================
+
+async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    query = update.callback_query
+    user_id = query.from_user.id
+
+    await query.answer()
+
+    user = users.find_one({"user_id": user_id})
+
+    balance = user["balance"]
+    tasks_done = user["tasks"]
+    refs = user["referrals"]
+    warns = user["warnings"]
+
+    rank = users.count_documents({"tasks": {"$gt": tasks_done}}) + 1
+
     text = (
-        "👤 <b>User Dashboard</b>\n"
-        "━━━━━━━━━━━━━━━━━━\n"
-        f"💰 <b>Balance:</b> <code>₹{u['balance']:.2f}</code>\n"
-        f"✅ <b>Tasks Done:</b> <code>{u['tasks']}</code>\n"
-        f"👥 <b>Referrals:</b> <code>{u['referrals']}</code>\n"
-        f"⚠️ <b>Warnings:</b> <code>{u['warnings']}/3</code>\n"
-        f"🆔 <b>ID:</b> <code>{user_id}</code>\n"
-        "━━━━━━━━━━━━━━━━━━"
+        "📊 Your Dashboard\n\n"
+        f"💰 Balance: ₹{balance:.2f}\n"
+        f"⚡ Tasks Completed: {tasks_done}\n"
+        f"👥 Referrals: {refs}\n"
+        f"🏆 Rank: #{rank}\n"
+        f"⚠️ Warnings: {warns}"
     )
-    await message.answer_photo(IMAGE_URL, caption=text)
 
-@dp.message(F.text == "👥 Refer & Earn")
-async def refer_msg(message: types.Message):
-    me = await bot.get_me()
-    link = f"https://t.me/{me.username}?start={message.from_user.id}"
+    await query.message.edit_text(
+        text,
+        reply_markup=main_menu()
+    )
+
+
+# ==============================
+# STATS COMMAND (ADMIN)
+# ==============================
+
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    user_id = update.effective_user.id
+
+    if user_id not in ADMIN_IDS:
+        return
+
+    total_users = users.count_documents({})
+    total_tasks = users.aggregate([
+        {"$group": {"_id": None, "sum": {"$sum": "$tasks"}}}
+    ])
+
+    tasks_count = 0
+    for i in total_tasks:
+        tasks_count = i["sum"]
+
+    total_paid = users.aggregate([
+        {"$group": {"_id": None, "sum": {"$sum": "$balance"}}}
+    ])
+
+    paid = 0
+    for i in total_paid:
+        paid = i["sum"]
+
+    pending_withdraw = withdrawals.count_documents({"status": "pending"})
+
     text = (
-        "👥 <b>Referral Program</b>\n\n"
-        "Share your link and earn for every friend who completes 1 task!\n\n"
-        f"🎁 <b>Reward:</b> <code>₹{REFER_REWARD}</code>\n\n"
-        f"🔗 <b>Your Link:</b>\n<code>{link}</code>"
+        "📊 Bot Statistics\n\n"
+        f"👤 Users: {total_users}\n"
+        f"⚡ Tasks Completed: {tasks_count}\n"
+        f"💰 Total Balance Held: ₹{paid:.2f}\n"
+        f"💳 Pending Withdrawals: {pending_withdraw}"
     )
-    await message.answer_photo(IMAGE_URL, caption=text)
 
-# --- CALLBACK HANDLERS FOR INLINE BUTTONS ---
+    await update.message.reply_text(text)
 
-@dp.callback_query(F.data == "start_task_btn")
-async def cb_start_task(callback: types.CallbackQuery):
-    await callback.answer()
-    await generate_task(callback.from_user.id, callback.message)
 
-@dp.callback_query(F.data == "profile_btn")
-async def cb_profile(callback: types.CallbackQuery):
-    await callback.answer()
-    u = await users.find_one({"_id": callback.from_user.id})
-    text = f"👤 <b>User Dashboard</b>\n\n💰 <b>Balance:</b> <code>₹{u['balance']:.2f}</code>\n✅ <b>Tasks:</b> <code>{u['tasks']}</code>"
-    await callback.message.answer_photo(IMAGE_URL, caption=text)
+# ==============================
+# HANDLERS
+# ==============================
 
-@dp.callback_query(F.data == "refer_btn")
-async def cb_refer(callback: types.CallbackQuery):
-    await callback.answer()
-    me = await bot.get_me()
-    link = f"https://t.me/{me.username}?start={callback.from_user.id}"
-    await callback.message.answer_photo(IMAGE_URL, caption=f"👥 <b>Refer & Earn</b>\n\nLink: <code>{link}</code>")
+app.add_handler(CallbackQueryHandler(leaderboard, pattern="leaderboard"))
+app.add_handler(CommandHandler("stats", stats))
+# ==============================
+# WITHDRAW REQUEST
+# ==============================
 
-@dp.callback_query(F.data == "leaderboard_btn")
-async def cb_leaderboard(callback: types.CallbackQuery):
-    await callback.answer()
-    cursor = users.find().sort("tasks", -1).limit(10)
-    text = "🏆 <b>Top 10 Performers</b>\n\n"
-    idx = 1
-    async for u in cursor:
-        text += f"{idx}️⃣ <code>ID: {u['_id']}</code> | <b>{u['tasks']}</b> Tasks\n"
-        idx += 1
-    await callback.message.answer_photo(IMAGE_URL, caption=text)
+async def withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-@dp.callback_query(F.data == "tutorial_btn")
-async def cb_tutorial(callback: types.CallbackQuery):
-    await callback.answer()
-    await callback.message.answer_photo(IMAGE_URL, caption="📖 <b>Tutorial</b>\n\nWatch our video guide here:", 
-    reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="📺 Watch Now", url="https://youtube.com")]]))
+    query = update.callback_query
+    user_id = query.from_user.id
 
-@dp.callback_query(F.data == "withdraw_btn")
-async def cb_withdraw(callback: types.CallbackQuery):
-    await callback.answer()
-    u = await users.find_one({"_id": callback.from_user.id})
-    if u["balance"] < MIN_WITHDRAW:
-        await callback.message.answer(f"❌ <b>Insufficient Balance!</b>\nMin: ₹{MIN_WITHDRAW}")
+    await query.answer()
+
+    user = users.find_one({"user_id": user_id})
+
+    balance = user["balance"]
+
+    if balance < MIN_WITHDRAW:
+
+        await query.message.reply_text(
+            f"❌ Minimum withdraw is ₹{MIN_WITHDRAW}"
+        )
+        return
+
+    pending = withdrawals.find_one({
+        "user_id": user_id,
+        "status": "pending"
+    })
+
+    if pending:
+
+        await query.message.reply_text(
+            "⚠️ You already have a pending withdrawal."
+        )
+        return
+
+    context.user_data["withdraw_mode"] = True
+
+    await query.message.reply_text(
+        "💳 Send your payment details.\n\nExample:\nUPI: name@upi"
+    )
+
+
+# ==============================
+# RECEIVE PAYMENT DETAILS
+# ==============================
+
+async def withdraw_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    user_id = update.effective_user.id
+
+    if not context.user_data.get("withdraw_mode"):
+        return
+
+    payment = update.message.text
+
+    user = users.find_one({"user_id": user_id})
+
+    amount = user["balance"]
+
+    withdraw_id = str(uuid.uuid4())
+
+    withdrawals.insert_one({
+        "withdraw_id": withdraw_id,
+        "user_id": user_id,
+        "amount": amount,
+        "payment": payment,
+        "status": "pending",
+        "time": int(time.time())
+    })
+
+    users.update_one(
+        {"user_id": user_id},
+        {"$set": {"balance": 0}}
+    )
+
+    context.user_data["withdraw_mode"] = False
+
+    await update.message.reply_text(
+        "✅ Withdrawal request submitted.\nAdmin will review it soon."
+    )
+
+    # notify admin
+    for admin in ADMIN_IDS:
+
+        text = (
+            "💳 New Withdrawal Request\n\n"
+            f"User: {user_id}\n"
+            f"Amount: ₹{amount}\n"
+            f"Payment: {payment}\n"
+            f"ID: {withdraw_id}"
+        )
+
+        buttons = [
+            [
+                InlineKeyboardButton(
+                    "✅ Approve",
+                    callback_data=f"approve_{withdraw_id}"
+                ),
+                InlineKeyboardButton(
+                    "❌ Reject",
+                    callback_data=f"reject_{withdraw_id}"
+                )
+            ]
+        ]
+
+        await context.bot.send_message(
+            chat_id=admin,
+            text=text,
+            reply_markup=InlineKeyboardMarkup(buttons)
+        )
+
+
+# ==============================
+# ADMIN WITHDRAW PANEL
+# ==============================
+
+async def withdrawals_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    user_id = update.effective_user.id
+
+    if user_id not in ADMIN_IDS:
+        return
+
+    pending = withdrawals.find({"status": "pending"})
+
+    text = "💳 Pending Withdrawals\n\n"
+
+    for w in pending:
+
+        text += (
+            f"ID: {w['withdraw_id']}\n"
+            f"User: {w['user_id']}\n"
+            f"Amount: ₹{w['amount']}\n\n"
+        )
+
+    await update.message.reply_text(text)
+
+
+# ==============================
+# APPROVE WITHDRAW
+# ==============================
+
+async def approve_withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    query = update.callback_query
+    await query.answer()
+
+    withdraw_id = query.data.replace("approve_", "")
+
+    w = withdrawals.find_one({"withdraw_id": withdraw_id})
+
+    if not w:
+        return
+
+    withdrawals.update_one(
+        {"withdraw_id": withdraw_id},
+        {"$set": {"status": "approved"}}
+    )
+
+    await query.message.edit_text(
+        "✅ Withdrawal approved"
+    )
+
+
+# ==============================
+# REJECT WITHDRAW
+# ==============================
+
+async def reject_withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    query = update.callback_query
+    await query.answer()
+
+    withdraw_id = query.data.replace("reject_", "")
+
+    w = withdrawals.find_one({"withdraw_id": withdraw_id})
+
+    if not w:
+        return
+
+    withdrawals.update_one(
+        {"withdraw_id": withdraw_id},
+        {"$set": {"status": "rejected"}}
+    )
+
+    # refund user
+    users.update_one(
+        {"user_id": w["user_id"]},
+        {"$inc": {"balance": w["amount"]}}
+    )
+
+    await query.message.edit_text(
+        "❌ Withdrawal rejected"
+    )
+
+
+# ==============================
+# HANDLERS
+# ==============================
+
+app.add_handler(CallbackQueryHandler(withdraw, pattern="withdraw"))
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, withdraw_details))
+
+app.add_handler(CommandHandler("withdrawals", withdrawals_panel))
+
+app.add_handler(CallbackQueryHandler(approve_withdraw, pattern="approve_"))
+app.add_handler(CallbackQueryHandler(reject_withdraw, pattern="reject_"))
+# ==============================
+# BROADCAST SYSTEM
+# ==============================
+
+async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    user_id = update.effective_user.id
+
+    if user_id not in ADMIN_IDS:
+        return
+
+    if not update.message.reply_to_message:
+
+        await update.message.reply_text(
+            "Reply to a message with /broadcast"
+        )
+        return
+
+    msg = update.message.reply_to_message
+
+    all_users = users.find()
+
+    sent = 0
+    failed = 0
+
+    for u in all_users:
+
+        try:
+
+            await msg.copy(chat_id=u["user_id"])
+
+            sent += 1
+
+            await asyncio.sleep(0.05)
+
+        except:
+
+            failed += 1
+
+    await update.message.reply_text(
+        f"📢 Broadcast Complete\n\n"
+        f"Sent: {sent}\n"
+        f"Failed: {failed}"
+    )
+
+
+# ==============================
+# TUTORIAL SETUP
+# ==============================
+
+async def set_tutorial(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    user_id = update.effective_user.id
+
+    if user_id not in ADMIN_IDS:
+        return
+
+    if not update.message.reply_to_message:
+
+        await update.message.reply_text(
+            "Reply to a video with /tutorial"
+        )
+        return
+
+    msg = update.message.reply_to_message
+
+    if not msg.video:
+
+        await update.message.reply_text("Please reply to a video.")
+        return
+
+    file_id = msg.video.file_id
+
+    settings.update_one(
+        {"key": "tutorial"},
+        {"$set": {"file_id": file_id}},
+        upsert=True
+    )
+
+    await update.message.reply_text("✅ Tutorial saved.")
+
+
+# ==============================
+# ADD FSUB CHANNEL
+# ==============================
+
+async def add_fsub(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    user_id = update.effective_user.id
+
+    if user_id not in ADMIN_IDS:
+        return
+
+    if len(context.args) < 2:
+
+        await update.message.reply_text(
+            "Usage:\n/addfsub channel_id username"
+        )
+        return
+
+    channel_id = int(context.args[0])
+    username = context.args[1]
+
+    channels.insert_one({
+        "channel_id": channel_id,
+        "username": username,
+        "title": username,
+        "active": True
+    })
+
+    await update.message.reply_text("✅ Channel added.")
+
+
+# ==============================
+# REMOVE FSUB CHANNEL
+# ==============================
+
+async def remove_fsub(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    user_id = update.effective_user.id
+
+    if user_id not in ADMIN_IDS:
+        return
+
+    if not context.args:
+
+        await update.message.reply_text(
+            "Usage:\n/removefsub channel_id"
+        )
+        return
+
+    channel_id = int(context.args[0])
+
+    channels.delete_one({"channel_id": channel_id})
+
+    await update.message.reply_text("❌ Channel removed.")
+
+
+# ==============================
+# CUSTOM REFERRAL RATE
+# ==============================
+
+async def set_refer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    user_id = update.effective_user.id
+
+    if user_id not in ADMIN_IDS:
+        return
+
+    if len(context.args) < 2:
+
+        await update.message.reply_text(
+            "Usage:\n/setrefer user_id amount"
+        )
+        return
+
+    target = int(context.args[0])
+    amount = float(context.args[1])
+
+    users.update_one(
+        {"user_id": target},
+        {"$set": {"custom_ref": amount}}
+    )
+
+    await update.message.reply_text(
+        f"✅ Custom referral set: ₹{amount}"
+    )
+
+
+# ==============================
+# BAN USER
+# ==============================
+
+async def ban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    if update.effective_user.id not in ADMIN_IDS:
+        return
+
+    if not context.args:
+        return
+
+    target = int(context.args[0])
+
+    users.update_one(
+        {"user_id": target},
+        {"$set": {"banned": True}}
+    )
+
+    await update.message.reply_text("🚫 User banned.")
+
+
+# ==============================
+# UNBAN USER
+# ==============================
+
+async def unban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    if update.effective_user.id not in ADMIN_IDS:
+        return
+
+    if not context.args:
+        return
+
+    target = int(context.args[0])
+
+    users.update_one(
+        {"user_id": target},
+        {"$set": {"banned": False}}
+    )
+
+    await update.message.reply_text("✅ User unbanned.")
+
+
+# ==============================
+# HANDLERS
+# ==============================
+
+app.add_handler(CommandHandler("broadcast", broadcast))
+app.add_handler(CommandHandler("tutorial", set_tutorial))
+
+app.add_handler(CommandHandler("addfsub", add_fsub))
+app.add_handler(CommandHandler("removefsub", remove_fsub))
+
+app.add_handler(CommandHandler("setrefer", set_refer))
+
+app.add_handler(CommandHandler("ban", ban_user))
+app.add_handler(CommandHandler("unban", unban_user))
+# ==============================
+# CHANNEL PROMOTION SYSTEM
+# ==============================
+
+async def promotion_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    query = update.callback_query
+    await query.answer()
+
+    text = (
+        "📢 Promote Your Channel\n\n"
+        "Get real Telegram members from our task network.\n\n"
+        "Choose a promotion plan:"
+    )
+
+    buttons = [
+        [InlineKeyboardButton("📅 Weekly Plan – ₹49", callback_data="plan_week")],
+        [InlineKeyboardButton("📆 Monthly Plan – ₹149", callback_data="plan_month")],
+        [InlineKeyboardButton("⚡ Daily Plan – ₹15", callback_data="plan_day")],
+        [InlineKeyboardButton("💬 Contact Admin", callback_data="contact_admin")]
+    ]
+
+    await query.message.edit_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(buttons)
+    )
+
+
+# ==============================
+# PLAN DETAILS
+# ==============================
+
+async def plan_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    query = update.callback_query
+    await query.answer()
+
+    plan = query.data
+
+    if plan == "plan_week":
+        price = "₹49 / week"
+
+    elif plan == "plan_month":
+        price = "₹149 / month"
+
     else:
-        await callback.message.answer("💳 <b>Withdrawal</b>\n\nSend your UPI ID now.")
+        price = "₹15 / day"
 
-@dp.callback_query(F.data == "check_fsub")
-async def check_fsub_callback(callback: types.CallbackQuery):
-    if await is_subscribed(callback.from_user.id):
-        await callback.message.delete()
-        await callback.message.answer("✅ <b>Access Granted!</b> Choose an option:", reply_markup=inline_menu_kb())
-    else:
-        await callback.answer("❌ You haven't joined yet!", show_alert=True)
+    text = (
+        "📢 Channel Promotion\n\n"
+        f"Plan: {price}\n\n"
+        "Your channel will be added to our bot tasks.\n"
+        "Users will join your channel to complete tasks.\n\n"
+        "Contact admin to activate your promotion."
+    )
 
-# --- OTHER HANDLERS ---
+    buttons = [
+        [InlineKeyboardButton("💬 Message Admin", url="https://t.me/YourUsername")],
+        [InlineKeyboardButton("⬅ Back", callback_data="promo")]
+    ]
 
-@dp.message(F.text == "🎥 Tutorial")
-async def tutorial_handler(message: types.Message):
-    await message.answer_photo(IMAGE_URL, caption="📖 <b>How to Earn?</b>\n\nWatch our tutorial to understand the process properly.", 
-    reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="📺 Watch Video", url="https://youtube.com")]]))
+    await query.message.edit_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(buttons)
+    )
 
-@dp.message(F.text == "🏆 Leaderboard")
-async def leaderboard_handler(message: types.Message):
-    cursor = users.find().sort("tasks", -1).limit(10)
-    text = "🏆 <b>Top 10 Performers</b>\n\n"
-    idx = 1
-    async for u in cursor:
-        text += f"{idx}️⃣ <code>ID: {u['_id']}</code> | <b>{u['tasks']}</b> Tasks\n"
-        idx += 1
-    await message.answer_photo(IMAGE_URL, caption=text)
 
-@dp.message(F.text == "💳 Withdraw")
-async def withdraw_handler(message: types.Message):
-    u = await users.find_one({"_id": message.from_user.id})
-    if u["balance"] < MIN_WITHDRAW: 
-        return await message.answer_photo(IMAGE_URL, caption=f"❌ <b>Withdrawal Failed!</b>\n\nMinimum amount required: <b>₹{MIN_WITHDRAW}</b>")
-    await message.answer_photo(IMAGE_URL, caption="💳 <b>Withdrawal Request</b>\n\nPlease send your <b>UPI ID</b> or <b>Payment Number</b>.")
+# ==============================
+# CONTACT ADMIN BUTTON
+# ==============================
 
-@dp.message(F.text.contains("@"))
-async def handle_payment_input(message: types.Message):
-    user_id = message.from_user.id
-    u = await users.find_one({"_id": user_id})
-    if u and u["balance"] >= MIN_WITHDRAW:
-        amt = u["balance"]
-        await users.update_one({"_id": user_id}, {"$set": {"balance": 0.0}})
-        res = await withdraws.insert_one({"user_id": user_id, "amount": amt, "info": message.text, "status": "pending"})
-        await bot.send_message(ADMIN_ID, f"🔔 <b>Withdrawal Alert</b>\nUser: <code>{user_id}</code>\nAmount: ₹{amt}\nDetails: {message.text}\nApprove: <code>/approve {res.inserted_id}</code>")
-        await message.answer_photo(IMAGE_URL, caption="✅ <b>Request Sent!</b>\n\nYour payment will be processed within 24 hours.")
+async def contact_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-async def main():
-    Thread(target=run_flask).start()
-    await dp.start_polling(bot)
+    query = update.callback_query
+    await query.answer()
+
+    text = (
+        "💬 Contact Admin\n\n"
+        "To add your channel in the bot promotion system,\n"
+        "message the admin below."
+    )
+
+    buttons = [
+        [InlineKeyboardButton("📩 Message Admin", url="https://t.me/YourUsername")],
+        [InlineKeyboardButton("⬅ Back", callback_data="promo")]
+    ]
+
+    await query.message.edit_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(buttons)
+    )
+
+
+# ==============================
+# EXTRA CALLBACK HANDLERS
+# ==============================
+
+app.add_handler(CallbackQueryHandler(promotion_menu, pattern="promo"))
+app.add_handler(CallbackQueryHandler(plan_details, pattern="plan_"))
+app.add_handler(CallbackQueryHandler(contact_admin, pattern="contact_admin"))
+
+
+# ==============================
+# BOT STARTUP
+# ==============================
 
 if __name__ == "__main__":
-    asyncio.run(main())
+
+    print("Bot is running...")
+
+    app.run_polling()
