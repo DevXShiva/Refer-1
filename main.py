@@ -505,7 +505,7 @@ async def create_shortlink(url):
     # Replace with your shortener API logic
 
     # Example placeholder
-    short_url = f"https://short.link/?api={SHORTNER_KEY}&url={url}"
+    short_url = f"https://mdiskshort.in/?api={SHORTNER_KEY}&url={url}"
 
     return short_url
 
