@@ -29,7 +29,7 @@ from pymongo import MongoClient
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 MONGO_URL = os.getenv("MONGO_URL")
 
-ADMIN_IDS = [123456789]
+ADMIN_IDS = list(map(int, os.getenv("ADMIN_IDS").split(",")))
 
 SHORTNER_API = "https://mdiskshort.in/api"
 SHORTNER_KEY = os.getenv("SHORTNER_KEY")
