@@ -4,6 +4,7 @@ import os
 import asyncio
 import time
 import uuid
+import aiohttp
 from datetime import datetime
 from dotenv import load_dotenv
 load_dotenv()
@@ -502,12 +503,17 @@ def update_last_task(user_id):
 
 async def create_shortlink(url):
 
-    # Replace with your shortener API logic
+    api_url = f"https://mdiskshort.in/api?api={SHORTNER_KEY}&url={url}"
 
-    # Example placeholder
-    short_url = f"https://mdiskshort.in/api?api={SHORTNER_KEY}&url={url}"
+    async with aiohttp.ClientSession() as session:
+        async with session.get(api_url) as resp:
 
-    return short_url
+            data = await resp.json()
+
+            if data.get("status") == "success":
+                return data.get("shortenedUrl")
+
+            return None
 
 
 # ==============================
