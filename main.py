@@ -45,10 +45,10 @@ ADMIN_IDS = list(map(int, os.getenv("ADMIN_IDS").split(",")))
 SHORTNER_API = "https://mdiskshort.in/api"
 SHORTNER_KEY = os.getenv("SHORTNER_KEY")
 
-BOT_USERNAME = "PocketMoneyTask_bot"
+BOT_USERNAME = "EarnMoneyPocket_bot"
 
 TASK_REWARD = 0.30
-DEFAULT_REF_REWARD = 0.80
+DEFAULT_REF_REWARD = 0.50
 
 MIN_WITHDRAW = 30
 
@@ -294,7 +294,7 @@ def main_menu():
             InlineKeyboardButton("📊 Profile", callback_data="profile"),
             InlineKeyboardButton("💳 Withdraw", callback_data="withdraw")
         ],
-        [InlineKeyboardButton("📢 Add Your Channel", callback_data="promo")]
+        [InlineKeyboardButton("📢 Add Your Channel", callback_data="promo", style="success")]
     ]
 
     return InlineKeyboardMarkup(keyboard)
