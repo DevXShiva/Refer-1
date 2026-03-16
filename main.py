@@ -294,7 +294,7 @@ def main_menu():
             InlineKeyboardButton("📊 Profile", callback_data="profile"),
             InlineKeyboardButton("💳 Withdraw", callback_data="withdraw")
         ],
-        [InlineKeyboardButton("📢 Add Your Channel", callback_data="promo", style="success")]
+        [InlineKeyboardButton("📢 Add Your Channel", callback_data="promo")]
     ]
 
     return InlineKeyboardMarkup(keyboard)
