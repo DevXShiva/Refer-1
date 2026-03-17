@@ -1291,7 +1291,7 @@ async def plan_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     buttons = [
-        [InlineKeyboardButton("💬 Message Admin", url="https://t.me/YourUsername")],
+        [InlineKeyboardButton("💬 Message Admin", url="https://t.me/theprofessorreport_bot")],
         [InlineKeyboardButton("⬅ Back", callback_data="promo")]
     ]
 
@@ -1317,7 +1317,7 @@ async def contact_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     buttons = [
-        [InlineKeyboardButton("📩 Message Admin", url="https://t.me/YourUsername")],
+        [InlineKeyboardButton("📩 Message Admin", url="https://t.me/theprofessorreport_bot")],
         [InlineKeyboardButton("⬅ Back", callback_data="promo")]
     ]
 
